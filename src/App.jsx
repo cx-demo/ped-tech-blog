@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Art from './Art.jsx'
-import { articleUrl, formatDate, isValidPost, readStored, seedPosts, topics } from './posts.js'
+import { articleUrl, formatDate, readStored, seedPosts, topics } from './posts.js'
 import './App.css'
 
 const currentYear = new Date().getFullYear()
@@ -50,10 +50,10 @@ function Modal({ open, onClose, title, children, wide = false }) {
 }
 
 function App() {
-  const [posts, setPosts] = useState(() => {
-    const stored = readStored('stacked-posts', [])
-    return [...(Array.isArray(stored) ? stored.filter(isValidPost) : []), ...seedPosts]
-  })
+  const [posts, setPosts] = useState(seedPosts)
+  const [loading, setLoading] = useState(true)
+  const [publishing, setPublishing] = useState(false)
+  const [requiresKey, setRequiresKey] = useState(false)
   const [saved, setSaved] = useState(() => {
     const stored = readStored('stacked-saved', [])
     return Array.isArray(stored) ? stored.filter((id) => typeof id === 'string') : []
@@ -75,6 +75,27 @@ function App() {
     || window.location.pathname.match(/^\/articles\/([^/]+)\/?$/)?.[1]
   const article = posts.find((post) => post.id === articleId)
   const featured = seedPosts[0]
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch('/api/posts', { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not load articles')
+        return response.json()
+      })
+      .then((data) => {
+        setPosts(data.posts)
+        setRequiresKey(data.requiresKey)
+        setLoading(false)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setLoading(false)
+          setNotice('Could not reach the blog server. Included articles are still available; please try again later.')
+        }
+      })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
@@ -124,7 +145,7 @@ function App() {
     document.getElementById('latest')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  function publish(event) {
+  async function publish(event) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     const title = data.get('title').trim()
@@ -138,23 +159,24 @@ function App() {
     if (tags.length > 5 || tags.some((value) => value.length > 30)) {
       setFormError('Use up to 5 tags, each no longer than 30 characters.'); return
     }
-    const category = data.get('category')
-    const post = {
-      id: `local-${crypto.randomUUID()}`, title, author, body, excerpt, tags, category,
-      initials: author.split(/\s+/).slice(0, 2).map((value) => value[0].toUpperCase()).join(''),
-      date: new Date().toISOString().slice(0, 10),
-      minutes: Math.max(1, Math.ceil(body.split(/\s+/).length / 200)),
-      art: { Development: 'react', 'AI & ML': 'ai', 'Cloud & DevOps': 'docker', Design: 'css', Cybersecurity: 'security' }[category],
-    }
+    setPublishing(true); setFormError('')
     try {
-      const next = [post, ...posts.filter((value) => value.id.startsWith('local-'))]
-      localStorage.setItem('stacked-posts', JSON.stringify(next))
-      setPosts([...next, ...seedPosts])
+      const response = await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(requiresKey ? { 'X-Publish-Key': data.get('publishKey') } : {}) },
+        body: JSON.stringify({ title, author, body, excerpt, tags, category: data.get('category') }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not publish your article.')
+      setPosts((current) => [result, ...current])
       setWriting(false); setFormError(''); formRef.current.reset()
       setQuery(''); setTopic('All posts'); setTag(''); setSavedOnly(false); setSort('latest'); setLimit(6)
-      setNotice('Your article is published in this browser. Nice work!')
-    } catch {
-      setFormError('Could not save your article. Browser storage may be full or disabled. Your draft is still here.')
+      setNotice('Your article is published. Nice work!')
+      if (articleId) window.location.assign(articleUrl(result))
+    } catch (error) {
+      setFormError(`${error.message} Your draft is still here.`)
+    } finally {
+      setPublishing(false)
     }
   }
 
@@ -184,7 +206,7 @@ function App() {
             <div className="article-body"><ArticleBody body={article.body} /></div>
             <div className="article-end"><span>Keep a good idea close.</span><button className="secondary-button" onClick={() => toggleSave(article.id)}><Icon name="bookmark" size={16} />{saved.includes(article.id) ? 'Saved to reading list' : 'Save this article'}</button></div>
           </article>
-        ) : <div className="empty-state"><Icon name="search" size={32} /><h1>Article not found</h1><p>This article may be saved in a different browser.</p><a className="primary-button" href="/">Explore articles</a></div> : (
+        ) : <div className="empty-state"><Icon name="search" size={32} /><h1>{loading ? 'Loading your next good read…' : 'Article not found'}</h1><p>{loading ? 'Just a moment.' : 'This link may be incorrect or the server may be unavailable.'}</p><a className="primary-button" href="/">Explore articles</a></div> : (
           <>
             <section className="intro"><div className="eyebrow"><span className="green-dot" /> A SPACE FOR CURIOUS MINDS</div><h1>Ideas for a <span>better-built</span> web<span className="title-dot">.</span></h1><p>Fresh perspectives, practical guides, and a little inspiration.<br className="mobile-break" /> For the people who never stop building.</p><div className="intro-decoration" aria-hidden="true"><span>{'{'}<span> / </span>{'}'}</span><i /><i /><i /></div></section>
             <section className="featured" aria-label="Featured article"><div className="feature-copy"><div className="feature-label"><Icon name="bolt" size={13} /> EDITOR’S PICK <span>·</span> <span className="feature-topic">THE BIG PICTURE</span></div><a href={articleUrl(featured)}><h2>{featured.title}</h2></a><p>{featured.excerpt}</p><div className="feature-meta"><span className="avatar avatar-am">{featured.initials}</span><div><strong>{featured.author}</strong><span>{formatDate(featured.date)} <b>·</b> {featured.minutes} min read</span></div><a className="feature-arrow" href={articleUrl(featured)} aria-label={`Read ${featured.title}`}><Icon name="arrow" size={23} /></a></div></div><a className="feature-visual" href={articleUrl(featured)} aria-label={`Read ${featured.title}`}><Art kind="feature" large /></a></section>
@@ -214,19 +236,20 @@ function App() {
 
       <Modal open={writing} onClose={() => setWriting(false)} title="Share your next great idea." wide>
         <p className="modal-intro">Good things start with a little perspective. What’s yours?</p>
-        <div className="local-note"><Icon name="code" size={17} /><span>Posts are saved in this browser only, not published to a public server.</span></div>
+        <div className="local-note"><Icon name="code" size={17} /><span>Your article will be published on this blog, ready for everyone to discover.</span></div>
         <form ref={formRef} onSubmit={publish} className="publish-form">
           <label>Article title<input name="title" required maxLength={120} placeholder="Give your idea a great headline" /></label>
           <div className="form-columns"><label>Your name<input name="author" required maxLength={60} placeholder="How should we credit you?" /></label><label>Topic<select name="category">{topics.slice(1).map((value) => <option key={value}>{value}</option>)}</select></label></div>
           <label>Short description<textarea name="excerpt" required maxLength={240} rows={2} placeholder="A little preview to draw your readers in..." /></label>
           <label>Tags <span className="field-hint">Comma separated · up to 5</span><input name="tags" required maxLength={160} placeholder="React, JavaScript, Web Development" /></label>
           <label>Your story <span className="field-hint">Use ## for section headings</span><textarea name="body" required maxLength={50000} rows={9} placeholder="Start with what inspired you. Share what you learned." /></label>
+          {requiresKey && <label>Publishing key <span className="field-hint">Ask the blog owner for access</span><input name="publishKey" type="password" required autoComplete="off" placeholder="Enter your publishing key" /></label>}
           {formError && <p className="form-error" role="alert">{formError}</p>}
-          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => setWriting(false)}>Keep editing later</button><button className="primary-button" type="submit">Publish post <Icon name="arrow" size={16} /></button></div>
+          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => setWriting(false)}>Keep editing later</button><button className="primary-button" type="submit" disabled={loading || publishing}>{publishing ? 'Publishing…' : loading ? 'Connecting…' : 'Publish post'} <Icon name="arrow" size={16} /></button></div>
         </form>
       </Modal>
       <Modal open={about} onClose={() => setAbout(false)} title="For the endlessly curious.">
-        <p className="modal-intro">Stacked is a little corner of the web for people who love to build.</p><div className="about-copy"><p>Explore practical perspectives on development, design, AI, cloud tools, and security. Find your next rabbit hole, save a good read, or share a lesson of your own.</p><p>This is a browser-local blog starter. Your posts and bookmarks stay on this device. Included articles have static, search-friendly pages; publicly publishing new posts requires a backend or CMS.</p></div><button className="primary-button" onClick={() => { setAbout(false); setWriting(true) }}>Share your perspective <Icon name="arrow" size={16} /></button>
+        <p className="modal-intro">Stacked is a little corner of the web for people who love to build.</p><div className="about-copy"><p>Explore practical perspectives on development, design, AI, cloud tools, and security. Find your next rabbit hole, save a good read, or share a lesson of your own.</p><p>Powered by Express. Published articles are shared across the blog, with readable pages and search-friendly tags. Your bookmarks and theme preference stay in this browser.</p></div><button className="primary-button" onClick={() => { setAbout(false); setWriting(true) }}>Share your perspective <Icon name="arrow" size={16} /></button>
       </Modal>
     </>
   )

@@ -152,9 +152,7 @@ Group routine tasks, write down open questions, and leave yourself a clear next 
 ]
 
 export function articleUrl(post) {
-  return seedPosts.some((seed) => seed.id === post.id)
-    ? `/articles/${post.id}/`
-    : `/?post=${encodeURIComponent(post.id)}`
+  return `/articles/${encodeURIComponent(post.id)}/`
 }
 
 export function formatDate(date) {
@@ -172,10 +170,25 @@ export function readStored(key, fallback) {
 }
 
 export function isValidPost(post) {
-  return post && typeof post.id === 'string' && /^local-[a-z0-9-]+$/.test(post.id)
+  return post && typeof post.id === 'string' && /^post-[a-z0-9-]+$/.test(post.id)
     && typeof post.title === 'string' && typeof post.excerpt === 'string'
     && typeof post.body === 'string' && typeof post.author === 'string'
-    && typeof post.initials === 'string' && topics.includes(post.category)
+    && typeof post.initials === 'string' && typeof post.art === 'string' && topics.slice(1).includes(post.category)
     && Array.isArray(post.tags) && post.tags.every((tag) => typeof tag === 'string')
     && /^\d{4}-\d{2}-\d{2}$/.test(post.date) && Number.isFinite(post.minutes)
+}
+
+export function validateInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+  const fields = { title: 120, author: 60, excerpt: 240, body: 50000 }
+  const value = {}
+  for (const [key, max] of Object.entries(fields)) {
+    if (typeof input[key] !== 'string' || !input[key].trim() || input[key].trim().length > max) return null
+    value[key] = input[key].trim()
+  }
+  if (!topics.slice(1).includes(input.category) || !Array.isArray(input.tags) || input.tags.length > 5) return null
+  if (input.tags.some((tag) => typeof tag !== 'string' || !tag.trim() || tag.trim().length > 30)) return null
+  value.tags = [...new Set(input.tags.map((tag) => tag.trim()))]
+  if (!value.tags.length) return null
+  return { ...value, category: input.category }
 }

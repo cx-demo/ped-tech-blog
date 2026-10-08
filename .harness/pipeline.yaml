@@ -1,0 +1,56 @@
+pipeline:
+  name: Ped Tech Blog CI
+  identifier: ped_tech_blog_ci
+  projectIdentifier: pedtechblog
+  orgIdentifier: default
+  tags: {}
+  properties:
+    ci:
+      codebase:
+        connectorRef: <+input>
+        repoName: ped-tech-blog
+        build: <+input>
+  stages:
+    - stage:
+        name: Build and Test
+        identifier: build_and_test
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: <+input>
+              namespace: <+input>
+              automountServiceAccountToken: true
+              nodeSelector: {}
+              os: Linux
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Install dependencies
+                  identifier: install_dependencies
+                  spec:
+                    connectorRef: <+input>
+                    image: node:22-alpine
+                    shell: Sh
+                    command: npm ci
+              - step:
+                  type: Run
+                  name: Test
+                  identifier: test
+                  spec:
+                    connectorRef: <+input>
+                    image: node:22-alpine
+                    shell: Sh
+                    command: npm run lint
+              - step:
+                  type: Run
+                  name: Build
+                  identifier: build
+                  spec:
+                    connectorRef: <+input>
+                    image: node:22-alpine
+                    shell: Sh
+                    command: npm run build

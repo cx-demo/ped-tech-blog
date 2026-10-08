@@ -57,6 +57,19 @@ docker run --rm -p 3000:3000 \
 
 The multi-stage image includes only production dependencies and built assets, runs as a non-root user, and checks `/healthz`. Back up the named volume to preserve articles.
 
+## Harness CI
+
+The pipeline in `.harness/pipeline.yaml` installs locked dependencies, runs Oxlint as the repository's test gate, and creates the production build with Node.js 22.
+
+Before importing the pipeline into Harness:
+
+1. Replace `YOUR_HARNESS_PROJECT_ID` and `YOUR_HARNESS_ORG_ID` with your Harness project and organization identifiers.
+2. Provide the code repository connector and branch or pull request when prompted.
+3. Provide a Kubernetes connector and namespace for the CI build infrastructure.
+4. Provide a Docker-compatible registry connector that can pull `node:22-alpine` for each run step.
+
+Harness shares the cloned workspace between steps, so the test and build steps reuse dependencies installed by `npm ci`.
+
 ## Kubernetes
 
 The `kubernetes.yaml` manifest includes a ConfigMap, 1Gi persistent volume claim, single-replica Deployment, and ClusterIP Service. It uses non-root execution, a read-only root filesystem, health probes, and resource limits.

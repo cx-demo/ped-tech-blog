@@ -44,7 +44,7 @@ pipeline:
                     connectorRef: <+input>
                     image: node:22-alpine
                     shell: Sh
-                    command: npm run lint
+                    command: npm run lint && npm test && npm run demos:check
               - step:
                   type: Run
                   name: Build

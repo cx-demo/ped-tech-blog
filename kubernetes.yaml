@@ -50,8 +50,8 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: DATA_DIR
-              value: /app/data
+            - name: DEMOS_DIR
+              value: /app/data/demos
             - name: SITE_URL
               valueFrom:
                 configMapKeyRef:
@@ -83,7 +83,7 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

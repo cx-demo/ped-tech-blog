@@ -1,0 +1,10 @@
+{
+  "$schema": "../demo.schema.json",
+  "schemaVersion": 1,
+  "id": "express-health-check",
+  "title": "Express health checks for containers",
+  "description": "A minimal Express API with liveness and readiness endpoints, graceful shutdown, and a Dockerfile wired to the health check.",
+  "tags": ["Node.js", "Express", "Docker", "Kubernetes", "API"],
+  "author": "Stacked demos",
+  "updated": "2026-10-09"
+}

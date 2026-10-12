@@ -1,0 +1,10 @@
+{
+  "$schema": "../demo.schema.json",
+  "schemaVersion": 1,
+  "id": "container-query-cards",
+  "title": "Responsive cards with CSS container queries",
+  "description": "A card component that adapts its layout to the space it is given, not the viewport, using CSS container queries. No JavaScript or build step.",
+  "tags": ["CSS", "Container queries", "Responsive design", "HTML"],
+  "author": "Stacked demos",
+  "updated": "2026-10-09"
+}

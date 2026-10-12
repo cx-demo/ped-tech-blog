@@ -3,12 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite",
     "dev:server": "node --watch server.js",
     "start": "node server.js",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node --test \"test/**/*.test.js\"",
+    "demos:check": "node scripts/demos.js check",
+    "demos:pack": "node scripts/demos.js pack",
     "preview": "vite preview"
   },
   "dependencies": {

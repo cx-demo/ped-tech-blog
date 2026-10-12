@@ -26,3 +26,6 @@ data/
 *.njsproj
 *.sln
 *.sw?
+
+# HVE tracking
+.copilot-tracking

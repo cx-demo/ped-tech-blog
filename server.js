@@ -1,109 +1,167 @@
 import express from 'express'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { timingSafeEqual } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { isValidPost, seedPosts, validateInput } from './src/posts.js'
-import { renderArticlePage, renderHomePage, renderSitemap, siteOrigin } from './src/seo.js'
+import {
+  exportDemo, importDemo, LIMITS, loadCatalog, prepareDemosDir, readDemoFile, readReadme, summarize,
+} from './src/catalog.js'
+import { renderDemoPage, renderHomePage, renderSitemap, siteOrigin } from './src/seo.js'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
+const ZIP_TYPES = ['application/zip', 'application/x-zip-compressed', 'application/x-zip', 'application/octet-stream']
+const MAX_CONCURRENT_EXPORTS = 2
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message)
+    this.status = status
+    this.expose = true
+  }
+}
+
+const contentDisposition = (name) => {
+  const fallback = name.replace(/[^\w.-]/g, '_')
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`
+}
+
+function downloadHeaders(res, name, type) {
+  res.set({
+    'Content-Type': type,
+    'Content-Disposition': contentDisposition(name),
+    'Content-Security-Policy': "sandbox; default-src 'none'",
+    'Cache-Control': 'no-store',
+  })
+}
 
 export async function createApp({
-  dataDir = process.env.DATA_DIR || path.join(root, 'data'),
+  bundledDir = path.join(root, 'demos'),
+  demosDir = process.env.DEMOS_DIR || bundledDir,
   siteUrl = process.env.SITE_URL,
   publishKey = process.env.PUBLISH_KEY || '',
+  template,
 } = {}) {
   if (process.env.NODE_ENV === 'production' && !publishKey.trim()) {
     throw new Error('Set a non-empty PUBLISH_KEY before starting the production server.')
   }
   const app = express()
   const origin = siteOrigin(siteUrl)
-  const file = path.join(dataDir, 'posts.json')
-  let published = []
-  try {
-    const stored = JSON.parse(await readFile(file, 'utf8'))
-    if (!Array.isArray(stored) || !stored.every(isValidPost)) throw new Error('Invalid posts data')
-    published = stored
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
+  const canImport = await prepareDemosDir(demosDir)
+  if (!canImport) console.warn(`Demo imports are disabled: ${demosDir} is not writable.`)
+
+  let catalog = []
+  const reload = async () => {
+    const result = await loadCatalog({ bundledDir, demosDir })
+    for (const warning of result.warnings) console.warn(warning)
+    catalog = result.demos
   }
+  await reload()
+
   let writes = Promise.resolve()
-  const allPosts = () => [...published, ...seedPosts]
-  const template = async () => {
+  let activeExports = 0
+  const findDemo = (id) => catalog.find((demo) => demo.id === id)
+  const getTemplate = template ? async () => template : async () => {
     const html = await readFile(path.join(root, 'dist/index.html'), 'utf8')
     return html.replace(/<link rel="canonical"[^>]*>/g, '')
   }
+
   app.disable('x-powered-by')
   app.use((req, res, next) => {
     res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'strict-origin-when-cross-origin' })
     next()
   })
-  app.use(express.json({ limit: '128kb' }))
   app.get('/healthz', (req, res) => res.json({ status: 'ok' }))
-  app.get('/api/posts', (req, res) => {
-    res.set('Cache-Control', 'no-store').json({ posts: allPosts(), requiresKey: Boolean(publishKey) })
+
+  app.get('/api/demos', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({ demos: catalog.map(summarize), requiresKey: Boolean(publishKey), canImport })
   })
-  app.post('/api/posts', async (req, res) => {
+
+  app.get('/api/demos/:id', async (req, res) => {
+    const demo = findDemo(req.params.id)
+    if (!demo) throw new HttpError(404, 'Demo not found.')
+    res.set('Cache-Control', 'no-store').json({ ...summarize(demo), files: demo.files, readme: await readReadme(demo) })
+  })
+
+  app.get('/api/demos/:id/files/*path', async (req, res) => {
+    const demo = findDemo(req.params.id)
+    const relativePath = req.params.path.join('/')
+    const data = demo && await readDemoFile(demo, relativePath)
+    if (!data) throw new HttpError(404, 'File not found.')
+    downloadHeaders(res, path.posix.basename(relativePath), 'application/octet-stream')
+    res.send(data)
+  })
+
+  app.get('/api/demos/:id/export', async (req, res) => {
+    const demo = findDemo(req.params.id)
+    if (!demo) throw new HttpError(404, 'Demo not found.')
+    if (activeExports >= MAX_CONCURRENT_EXPORTS) throw new HttpError(503, 'Export is busy, please retry in a moment.')
+    activeExports += 1
+    try {
+      const archive = await exportDemo(demo)
+      downloadHeaders(res, `${demo.id}.zip`, 'application/zip')
+      res.send(archive)
+    } finally {
+      activeExports -= 1
+    }
+  })
+
+  app.post('/api/demos/import', (req, res, next) => {
     if (req.get('origin')) {
+      let sameOrigin = false
       try {
-        if (new URL(req.get('origin')).host !== req.get('host')) return res.status(403).json({ error: 'Publish from this site, not another origin.' })
+        sameOrigin = new URL(req.get('origin')).host === req.get('host')
       } catch {
-        return res.status(403).json({ error: 'Invalid request origin.' })
+        throw new HttpError(403, 'Invalid request origin.')
       }
+      if (!sameOrigin) throw new HttpError(403, 'Import from this site, not another origin.')
     }
     if (publishKey) {
       const supplied = Buffer.from(req.get('x-publish-key') || '')
       const expected = Buffer.from(publishKey)
-      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return res.status(401).json({ error: 'A valid publishing key is required.' })
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw new HttpError(401, 'A valid publishing key is required.')
     }
-    const input = validateInput(req.body)
-    if (!input) return res.status(400).json({ error: 'Complete all fields, select a topic, and use 1–5 tags of up to 30 characters.' })
-    const post = {
-      ...input, id: `post-${randomUUID()}`,
-      initials: input.author.split(/\s+/).slice(0, 2).map((part) => part[0].toUpperCase()).join(''),
-      date: new Date().toISOString().slice(0, 10),
-      minutes: Math.max(1, Math.ceil(input.body.split(/\s+/).length / 200)),
-      art: { Development: 'react', 'AI & ML': 'ai', 'Cloud & DevOps': 'docker', Design: 'css', Cybersecurity: 'security' }[input.category],
-    }
-    const write = writes.then(async () => {
-      if (published.length >= 500) {
-        const error = new Error('The blog has reached its 500-post storage limit.')
-        error.status = 409
-        throw error
-      }
-      const next = [post, ...published]
-      await mkdir(dataDir, { recursive: true })
-      await writeFile(`${file}.tmp`, JSON.stringify(next, null, 2), { mode: 0o600 })
-      await rename(`${file}.tmp`, file)
-      published = next
+    if (!canImport) throw new HttpError(503, 'Importing is disabled because the demo directory is not writable.')
+    const matches = req.is(ZIP_TYPES)
+    if (matches === null || req.get('content-length') === '0') throw new HttpError(400, 'Choose a .zip archive to import.')
+    if (!matches) throw new HttpError(415, 'Upload a .zip archive.')
+    next()
+  }, express.raw({ type: ZIP_TYPES, limit: LIMITS.archiveBytes }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new HttpError(400, 'Choose a .zip archive to import.')
+    const replace = ['1', 'true'].includes(String(req.query.replace))
+    const work = writes.then(async () => {
+      const id = await importDemo(req.body, { demosDir, demos: catalog, replace })
+      await reload()
+      return id
     })
-    writes = write.catch(() => {})
-    await write
-    res.status(201).json(post)
+    writes = work.catch(() => {})
+    const id = await work
+    res.status(201).json(summarize(findDemo(id)))
   })
+
   app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found.' }))
+
   app.get('/', async (req, res) => {
-    res.set('Cache-Control', 'no-cache').type('html').send(renderHomePage(await template(), allPosts(), origin))
+    res.set('Cache-Control', 'no-cache').type('html').send(renderHomePage(await getTemplate(), catalog, origin))
   })
-  app.get('/articles/:id/', async (req, res) => {
-    const post = allPosts().find((value) => value.id === req.params.id)
-    if (!post) return res.status(404).type('html').send('<h1>Article not found</h1><a href="/">Back to Stacked</a>')
-    res.set('Cache-Control', 'no-cache').type('html').send(renderArticlePage(await template(), post, origin))
+  app.get('/catalog/:id/', async (req, res) => {
+    const demo = findDemo(req.params.id)
+    if (!demo) return res.status(404).type('html').send('<h1>Demo not found</h1><a href="/">Back to the demo catalog</a>')
+    res.set('Cache-Control', 'no-cache').type('html').send(renderDemoPage(await getTemplate(), demo, await readReadme(demo), origin))
   })
+  app.get('/articles/*path', (req, res) => res.redirect(301, '/'))
   app.get('/sitemap.xml', (req, res) => {
     if (!origin) return res.status(404).send('Set SITE_URL to enable the sitemap.')
-    res.type('application/xml').send(renderSitemap(allPosts(), origin))
+    res.type('application/xml').send(renderSitemap(catalog, origin))
   })
-  app.get('/robots.txt', (req, res) => res.type('text').send(`User-agent: *\nAllow: /\n${origin ? `Sitemap: ${origin}/sitemap.xml\n` : ''}`))
+  app.get('/robots.txt', (req, res) => res.type('text').send(`User-agent: *\nAllow: /\nDisallow: /api/\n${origin ? `Sitemap: ${origin}/sitemap.xml\n` : ''}`))
   app.use(express.static(path.join(root, 'dist'), { index: false }))
-  app.use((req, res) => res.status(404).type('html').send('<h1>Page not found</h1><a href="/">Back to Stacked</a>'))
+  app.use((req, res) => res.status(404).type('html').send('<h1>Page not found</h1><a href="/">Back to the demo catalog</a>'))
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error)
-    const status = error.status || 500
-    const message = status === 413 ? 'Your article is too large. Please shorten it.'
-      : status === 400 ? 'Invalid JSON request.'
-        : status === 409 ? error.message : 'Unable to save or load this page. Please try again.'
-    res.status(status).json({ error: message })
+    if (error.type === 'entity.too.large') return res.status(413).json({ error: `The archive is larger than the ${LIMITS.archiveBytes / (1024 * 1024)} MB import limit.` })
+    if (error.expose && error.status >= 400 && error.status < 600 && !error.type) return res.status(error.status).json({ error: error.message })
+    if (!error.status || error.status >= 500) console.error(error)
+    res.status(error.status && error.status < 500 ? error.status : 500).json({ error: 'Something went wrong. Please try again.' })
   })
   return app
 }
@@ -111,5 +169,5 @@ export async function createApp({
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const app = await createApp()
   const port = Number(process.env.PORT || 3000)
-  app.listen(port, () => console.log(`Stacked is running at http://localhost:${port}`))
+  app.listen(port, () => console.log(`Stacked demo catalog is running at http://localhost:${port}`))
 }

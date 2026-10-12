@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cx-demo/ped-tech-blog/demos/demo.schema.json",
+  "title": "Demo catalog manifest (demo.json)",
+  "description": "Describes one demo in the catalog. Place this file at the root of the demo folder and at the root of its archive. Unknown fields are allowed and preserved.",
+  "type": "object",
+  "required": ["title", "description", "tags"],
+  "properties": {
+    "$schema": { "type": "string", "description": "Optional editor hint pointing at this schema." },
+    "schemaVersion": { "const": 1, "default": 1, "description": "Manifest format version. Only 1 is supported." },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64,
+      "description": "Demo ID and folder name. Optional on import; derived from the archive folder name or title when absent. Must match the folder name when present."
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Display title shown in the catalog." },
+    "description": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Short summary shown on catalog cards and used for search." },
+    "tags": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1, "maxLength": 30 },
+      "description": "Search tags. Duplicates (ignoring case) are removed."
+    },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80, "description": "Optional author or team credit." },
+    "updated": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Optional last-updated date (YYYY-MM-DD). Defaults to the newest file modification date." },
+    "readme": { "type": "string", "maxLength": 200, "default": "README.md", "description": "Relative path of the Markdown file shown on the demo page." }
+  },
+  "additionalProperties": true
+}
